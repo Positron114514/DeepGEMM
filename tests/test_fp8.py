@@ -111,6 +111,7 @@ def test_m_grouped_gemm_masked() -> None:
             result = deep_gemm.m_grouped_fp8_gemm_nt_masked(a, b, d, masked_m, expected_m_per_group, disable_ue8m0_cast=disable_ue8m0_cast, enable_overlap=enable_overlap, signal=signal)
 
             if enable_overlap:
+                print("Checking signal")
                 block_m, threshold = result
                 check_signal(num_groups, max_m, block_m, threshold, signal, masked_m)
 
