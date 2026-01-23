@@ -122,9 +122,10 @@ def enumerate_m_grouped_masked_transpose(dtype: torch.dtype) -> Generator:
 def enumerate_m_grouped_masked_transpose_n_group(dtype: torch.dtype) -> Generator:
     max_n = 4096
     for kernel_type in get_kernel_types(dtype):
-        for num_groups, m in ((16, 8), (16, 16), (16, 32), (16, 64), (16, 128), (16, 256), (16, 512), (16, 1024), (16, 2048)):
-            for n, k in ((7168, 2048), ):
-                yield kernel_type, num_groups, max_n, n, m, k
+        for enable_overlap in (True, False):
+            for num_groups, m in ((16, 8), (16, 16), (16, 32), (16, 64), (16, 128), (16, 256), (16, 512), (16, 1024), (16, 2048)):
+                for n, k in ((7168, 2048), ):
+                    yield kernel_type, enable_overlap, num_groups, max_n, n, m, k
 
 def enumerate_k_grouped_contiguous(dtype: torch.dtype):
     # Only K-major is supported for SM90 FP8
@@ -246,7 +247,7 @@ def generate_m_grouped_masked(num_groups: int, max_m: int, expected_m_per_group:
         a_fp8[0][i], a_fp8[1][i] = per_token_cast_to_fp8(a[i], use_ue8m0=use_ue8m0)
         b_fp8[0][i], b_fp8[1][i] = per_block_cast_to_fp8(b[i], use_ue8m0=use_ue8m0)
 
-    max_signal_size = num_groups * ceil_div(max_m, 64)
+    max_signal_size = num_groups * ceil_div(max_m, 64)  # max_n, 16
     signal = torch.zeros(max_signal_size, dtype=torch.int32, device='cuda') if enable_overlap else None
 
     return a_fp8, b_fp8, masked_m, d, ref_d, signal
@@ -275,28 +276,28 @@ def generate_m_grouped_masked_2d1d(num_groups: int, max_m: int, expected_m_per_g
 
     return a_fp8, b_fp8, masked_m, d, ref_d
 
-def generate_m_grouped_masked_2d1d_transpose(num_groups: int, max_m: int, expected_m_per_group: int, n: int, k: int,
+def generate_m_grouped_masked_2d1d_transpose(num_groups: int, max_n: int, expected_m_per_group: int, n: int, k: int,
                               use_ue8m0: bool = False, use_bf16: bool = False):
-    a = torch.randn((num_groups, max_m, k), device='cuda', dtype=torch.bfloat16)
+    a = torch.randn((num_groups, max_n, k), device='cuda', dtype=torch.bfloat16)
     b = torch.randn((num_groups, n, k), device='cuda', dtype=torch.bfloat16)
-    d = torch.empty((num_groups, n, max_m), device='cuda', dtype=torch.bfloat16) #输出是转置的
+    d = torch.empty((num_groups, n, max_n), device='cuda', dtype=torch.bfloat16) #输出是转置的
     ref_d = torch.einsum('gmk,gnk->gmn', a, b).transpose(2, 1) #输出是转置的
 
-    masked_m = torch.empty((num_groups, ), device='cuda', dtype=torch.int)
+    masked_n = torch.empty((num_groups, ), device='cuda', dtype=torch.int)
     for j in range(num_groups):
-        masked_m[j] = int(expected_m_per_group)
-    assert masked_m.amax().item() <= max_m
+        masked_n[j] = int(expected_m_per_group)
+    assert masked_n.amax().item() <= max_n
 
     if use_bf16:
-        return a, b, masked_m, d, ref_d
+        return a, b, masked_n, d, ref_d
 
-    a_fp8 = (torch.empty_like(a, dtype=torch.float8_e4m3fn), torch.empty((num_groups, ceil_div(max_m, 128), ceil_div(k, 128)), device='cuda', dtype=torch.float))
+    a_fp8 = (torch.empty_like(a, dtype=torch.float8_e4m3fn), torch.empty((num_groups, ceil_div(max_n, 128), ceil_div(k, 128)), device='cuda', dtype=torch.float))
     b_fp8 = (torch.empty_like(b, dtype=torch.float8_e4m3fn), torch.empty((num_groups, n, ceil_div(k, 128)), device='cuda', dtype=torch.float))
     for i in range(num_groups):
         a_fp8[0][i], a_fp8[1][i] = per_block_cast_to_fp8(a[i], use_ue8m0=use_ue8m0)
         b_fp8[0][i], b_fp8[1][i] = per_token_cast_to_fp8(b[i], use_ue8m0=use_ue8m0)
 
-    return a_fp8, b_fp8, masked_m, d, ref_d
+    return a_fp8, b_fp8, masked_n, d, ref_d
 
 def generate_m_grouped_masked_2d1d_n_group(num_groups: int, max_n: int, m: int, expected_n_per_group: int, k: int,
                               use_ue8m0: bool = False, use_bf16: bool = False):
@@ -322,7 +323,7 @@ def generate_m_grouped_masked_2d1d_n_group(num_groups: int, max_n: int, m: int, 
     return a_fp8, b_fp8, masked_n, d, ref_d
 
 def generate_m_grouped_masked_2d1d_transpose_n_group(num_groups: int, max_n: int, m: int, expected_n_per_group: int, k: int,
-                              use_ue8m0: bool = False, use_bf16: bool = False):
+                              use_ue8m0: bool = False, use_bf16: bool = False, enable_overlap: bool = False):
     a = torch.randn((num_groups, m, k), device='cuda', dtype=torch.bfloat16)
     b = torch.randn((num_groups, max_n, k), device='cuda', dtype=torch.bfloat16)
     d = torch.empty((num_groups, max_n, m), device='cuda', dtype=torch.bfloat16) #输出是转置的
@@ -342,7 +343,10 @@ def generate_m_grouped_masked_2d1d_transpose_n_group(num_groups: int, max_n: int
         a_fp8[0][i], a_fp8[1][i] = per_block_cast_to_fp8(a[i], use_ue8m0=use_ue8m0)
         b_fp8[0][i], b_fp8[1][i] = per_token_cast_to_fp8(b[i], use_ue8m0=use_ue8m0)
 
-    return a_fp8, b_fp8, masked_n, d, ref_d
+    max_signal_size = num_groups * ceil_div(max_n, 16)  # max_n, 16
+    signal = torch.zeros(max_signal_size, dtype=torch.int32, device='cuda') if enable_overlap else None
+
+    return a_fp8, b_fp8, masked_n, d, ref_d, signal
 
 def generate_k_grouped_contiguous(num_groups: int, m: int, n: int, major_a: MajorTypeAB, major_b: MajorTypeAB, ks: List[int],
                                   use_ue8m0: bool = False, use_bf16: bool = False):

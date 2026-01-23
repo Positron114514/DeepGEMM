@@ -176,35 +176,36 @@ def test_m_grouped_gemm_masked_2d1d_transpose() -> None:
     print('Testing m-grouped masked 2d1d transpose GEMM:')
 
     # TODO: when the actual `m` is greater than `expected_m_per_group`, efficiency may significantly decrease.
-    for kernel_type, num_groups, max_m, expected_m_per_group, n, k in enumerate_m_grouped_masked_transpose(torch.float8_e4m3fn):
+    for kernel_type, num_groups, max_n, expected_m_per_group, n, k in enumerate_m_grouped_masked_transpose(torch.float8_e4m3fn):
         kernel_opt = f'1D1D' if kernel_type.is_1d1d() else '1D2D'
         use_ue8m0 = get_ue8m0_usage(kernel_type)
         disable_ue8m0_cast = not use_ue8m0
 
         # Test correctness
         for i in range(10):
-            a, b, masked_m, d, ref_d = generate_m_grouped_masked_2d1d_transpose(num_groups, max_m, expected_m_per_group, n, k, use_ue8m0=use_ue8m0)
-            deep_gemm.m_grouped_fp8_gemm_tn_transpose_masked(a, b, d, masked_m, expected_m_per_group, disable_ue8m0_cast=disable_ue8m0_cast)
+            a, b, masked_n, d, ref_d, signal = generate_m_grouped_masked_2d1d_transpose(num_groups, max_n, expected_m_per_group, n, k, use_ue8m0=use_ue8m0)
+            deep_gemm.m_grouped_fp8_gemm_tn_transpose_masked(a, b, d, masked_n, expected_m_per_group, disable_ue8m0_cast=disable_ue8m0_cast)
+
             for j in range(num_groups):
-                if masked_m[j].item() == 0:
+                if masked_n[j].item() == 0:
                     continue
-                diff = calc_diff(d[j, :masked_m[j].item()], ref_d[j, :masked_m[j].item()])
-                assert diff < 0.001, f'{max_m=}, {n=}, {k=}, {j=}, masked_m={masked_m[j]}, {kernel_opt}, {num_groups=}, {diff:.5f}'
+                diff = calc_diff(d[j, :masked_n[j].item()], ref_d[j, :masked_n[j].item()])
+                assert diff < 0.001, f'{max_n=}, {n=}, {k=}, {j=}, masked_n={masked_n[j]}, {kernel_opt}, {num_groups=}, {diff:.5f}'
 
         # Construct full cases
-        a, b, masked_m, d, ref_d = generate_m_grouped_masked_2d1d_transpose(num_groups, max_m, expected_m_per_group, n, k, use_ue8m0=use_ue8m0)
+        a, b, masked_n, d, ref_d = generate_m_grouped_masked_2d1d_transpose(num_groups, max_n, expected_m_per_group, n, k, use_ue8m0=use_ue8m0)
 
         # noinspection PyShadowingNames
         def test_func():
-            deep_gemm.m_grouped_fp8_gemm_tn_transpose_masked(a, b, d, masked_m, expected_m_per_group, disable_ue8m0_cast=disable_ue8m0_cast)
+            deep_gemm.m_grouped_fp8_gemm_tn_transpose_masked(a, b, d, masked_n, expected_m_per_group, disable_ue8m0_cast=disable_ue8m0_cast)
 
         # Test performance with fixed shapes
-        valid_m = masked_m.sum().item()
+        valid_n = masked_n.sum().item()
         t = bench_kineto(test_func, 'fp8_gemm', suppress_kineto_output=True)
         print(f' > Perf ({num_groups=}, expected_m_per_group={expected_m_per_group:4}, n={n:4}, k={k:4}, {kernel_opt}): '
               f'{t * 1e6:4.0f} us | '
-              f'{2 * valid_m * n * k / t / 1e12:4.0f} TFLOPS | '
-              f'{(count_bytes(a, d) * valid_m / (max_m * num_groups) + count_bytes(b)) / 1e9 / t:4.0f} GB/s')
+              f'{2 * valid_n * n * k / t / 1e12:4.0f} TFLOPS | '
+              f'{(count_bytes(a, d) * valid_n / (max_n * num_groups) + count_bytes(b)) / 1e9 / t:4.0f} GB/s')
     print()
 
 def test_m_grouped_gemm_masked_2d1d_n_group() -> None:
@@ -246,15 +247,21 @@ def test_m_grouped_gemm_masked_2d1d_transpose_n_group() -> None:
     print('Testing m-grouped masked 2d1d transpose n-group GEMM:')
 
     # TODO: when the actual `m` is greater than `expected_m_per_group`, efficiency may significantly decrease.
-    for kernel_type, num_groups, max_n, m, expected_n_per_group, k in enumerate_m_grouped_masked_transpose_n_group(torch.float8_e4m3fn):
+    for kernel_type, enable_overlap, num_groups, max_n, m, expected_n_per_group, k in enumerate_m_grouped_masked_transpose_n_group(torch.float8_e4m3fn):
         kernel_opt = f'1D1D' if kernel_type.is_1d1d() else '1D2D'
         use_ue8m0 = get_ue8m0_usage(kernel_type)
         disable_ue8m0_cast = not use_ue8m0
 
         # Test correctness
         for i in range(10):
-            a, b, masked_n, d, ref_d = generate_m_grouped_masked_2d1d_transpose_n_group(num_groups, max_n, m, expected_n_per_group, k, use_ue8m0=use_ue8m0)
-            deep_gemm.m_grouped_fp8_gemm_tn_transpose_n_group_masked(a, b, d, masked_n, expected_n_per_group, disable_ue8m0_cast=disable_ue8m0_cast)
+            a, b, masked_n, d, ref_d, signal = generate_m_grouped_masked_2d1d_transpose_n_group(num_groups, max_n, m, expected_n_per_group, k, use_ue8m0=use_ue8m0)
+            result = deep_gemm.m_grouped_fp8_gemm_tn_transpose_n_group_masked(a, b, d, masked_n, expected_n_per_group, disable_ue8m0_cast=disable_ue8m0_cast, enable_overlap=enable_overlap, signal=signal)
+            
+            if enable_overlap:
+                print("Checking signal")
+                block_m, threshold = result
+                check_signal(num_groups, max_n, block_m, threshold, signal, masked_n)
+
             for j in range(num_groups):
                 if masked_n[j].item() == 0:
                     continue
@@ -262,11 +269,11 @@ def test_m_grouped_gemm_masked_2d1d_transpose_n_group() -> None:
                 assert diff < 0.001, f'{max_n=}, {m=}, {k=}, {j=}, masked_n={masked_n[j]}, {kernel_opt}, {num_groups=}, {diff:.5f}'
 
         # Construct full cases
-        a, b, masked_n, d, ref_d = generate_m_grouped_masked_2d1d_transpose_n_group(num_groups, max_n, m, expected_n_per_group, k, use_ue8m0=use_ue8m0)
+        a, b, masked_n, d, ref_d, signal = generate_m_grouped_masked_2d1d_transpose_n_group(num_groups, max_n, m, expected_n_per_group, k, use_ue8m0=use_ue8m0, enable_overlap=enable_overlap)
 
         # noinspection PyShadowingNames
         def test_func():
-            deep_gemm.m_grouped_fp8_gemm_tn_transpose_n_group_masked(a, b, d, masked_n, expected_n_per_group, disable_ue8m0_cast=disable_ue8m0_cast)
+            deep_gemm.m_grouped_fp8_gemm_tn_transpose_n_group_masked(a, b, d, masked_n, expected_n_per_group, disable_ue8m0_cast=disable_ue8m0_cast, enable_overlap=enable_overlap, signal=signal)
 
         # Test performance with fixed shapes
         valid_n = masked_n.sum().item()
@@ -321,15 +328,15 @@ if __name__ == '__main__':
     print('Origin DeepGEMM Optimization Config:')
     os.environ['GPS_BLOCK_M'] = str(0)
     os.environ['GPS_BLOCK_N'] = str(0)
-    test_gemm()
-    os.environ['GPS_IGNORE_STAGES_LIMIT'] = str(1)
-    test_m_grouped_gemm_masked()
-    os.environ['GPS_USE_TRANSPOSE'] = str(1)
-    test_m_grouped_gemm_masked_2d1d()
-    os.environ['GPS_USE_TRANSPOSE'] = str(2)
-    test_m_grouped_gemm_masked_2d1d_transpose()
-    os.environ['GPS_USE_TRANSPOSE'] = str(3)
-    test_m_grouped_gemm_masked_2d1d_n_group()
+    # test_gemm()
+    # os.environ['GPS_IGNORE_STAGES_LIMIT'] = str(1)
+    # test_m_grouped_gemm_masked()
+    # os.environ['GPS_USE_TRANSPOSE'] = str(1)
+    # test_m_grouped_gemm_masked_2d1d()
+    # os.environ['GPS_USE_TRANSPOSE'] = str(2)
+    # test_m_grouped_gemm_masked_2d1d_transpose()
+    # os.environ['GPS_USE_TRANSPOSE'] = str(3)
+    # test_m_grouped_gemm_masked_2d1d_n_group()
     os.environ['GPS_USE_TRANSPOSE'] = str(4)
     test_m_grouped_gemm_masked_2d1d_transpose_n_group()
     # print('\n' + '='*50)

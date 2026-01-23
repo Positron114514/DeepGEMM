@@ -412,7 +412,10 @@ static void m_grouped_fp8_gemm_tn_transpose_n_group_masked(const std::pair<torch
                                          const int& expected_n,
                                          std::optional<std::tuple<int, int, int>> recipe,
                                          const std::string& compiled_dims,
-                                         const bool& disable_ue8m0_cast) {
+                                         const bool& disable_ue8m0_cast, 
+                                         const int& max_block_n,
+                                         const bool& enable_overlap,
+                                         const std::optional<torch::Tensor>& signal) {
     // Shape must be `[G, M, K] @ [G, N, K].mT`
     const auto& major_a = get_major_type_ab(a.first);
     const auto& major_b = get_major_type_ab(b.first);
@@ -432,6 +435,12 @@ static void m_grouped_fp8_gemm_tn_transpose_n_group_masked(const std::pair<torch
     DG_HOST_ASSERT(d.scalar_type() == torch::kBFloat16);
     DG_HOST_ASSERT(masked_n.scalar_type() == torch::kInt);
 
+    if (enable_overlap) {
+        DG_HOST_ASSERT(signal.has_value());
+        DG_HOST_ASSERT(signal.value().is_contiguous());
+        DG_HOST_ASSERT(signal.value().scalar_type() == torch::kInt32);
+    }
+
     // D must be N-major
     check_major_type_cd(d);
 
@@ -443,13 +452,16 @@ static void m_grouped_fp8_gemm_tn_transpose_n_group_masked(const std::pair<torch
 
     // Dispatch implementation
     const auto& arch_major = device_runtime->get_arch_major();
+    std::optional<std::pair<int, int>> result = std::nullopt;
     if (arch_major == 9 and sfa.scalar_type() == torch::kFloat) {
         const auto& major_sfa = get_major_type_ab(sfa);
-        sm90_m_grouped_fp8_gemm_masked_2d1d_transpose_n_group(a.first, sfa, b.first, sfb, d, masked_n,
-                                            num_groups, m, n, k, expected_n, major_a, major_b, major_sfa, compiled_dims);
+        result = sm90_m_grouped_fp8_gemm_masked_2d1d_transpose_n_group(a.first, sfa, b.first, sfb, d, masked_n,
+                                            num_groups, m, n, k, expected_n, major_a, major_b, major_sfa, compiled_dims, max_block_n, enable_overlap, signal);
     } else {
         DG_HOST_UNREACHABLE("Unsupported architecture or scaling factor types");
     }
+
+    return result;
 }
 
 static void k_grouped_fp8_gemm_tn_contiguous(const std::pair<torch::Tensor, torch::Tensor>& a,
@@ -816,7 +828,9 @@ static void register_apis(pybind11::module_& m) {
     m.def("m_grouped_fp8_gemm_tn_transpose_n_group_masked", &m_grouped_fp8_gemm_tn_transpose_n_group_masked,
           py::arg("a"), py::arg("b"), py::arg("d"), py::arg("masked_n"),
           py::arg("expected_n"), py::arg("recipe") = std::nullopt,
-          py::arg("compiled_dims") = "nk", py::arg("disable_ue8m0_cast") = false);
+          py::arg("compiled_dims") = "nk", py::arg("disable_ue8m0_cast") = false),
+          py::arg("max_block_n") = 256, py::arg("enable_overlap") = false,
+          py::arg("signal") = std::nullopt);
     m.def("k_grouped_fp8_gemm_tn_contiguous", &k_grouped_fp8_gemm_tn_contiguous,
           py::arg("a"), py::arg("b"), py::arg("d"), py::arg("ks"),
           py::arg("ks_tensor"), py::arg("c") = std::nullopt,

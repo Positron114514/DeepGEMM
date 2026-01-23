@@ -502,14 +502,17 @@ static void sm90_m_grouped_fp8_gemm_masked_2d1d_n_group(const torch::Tensor& a, 
     SM90FP8Gemm1D2DRuntime::launch(runtime, args);
 }
 
-static void sm90_m_grouped_fp8_gemm_masked_2d1d_transpose_n_group(const torch::Tensor& a, const torch::Tensor& sfa,
+static std::optional<std::pair<int, int>> sm90_m_grouped_fp8_gemm_masked_2d1d_transpose_n_group(const torch::Tensor& a, const torch::Tensor& sfa,
                                                 const torch::Tensor& b, const torch::Tensor& sfb,
                                                 const torch::Tensor& d,
                                                 const torch::Tensor& masked_n,
                                                 const int& num_groups, const int& m, const int& n, const int& k,
                                                 const int& expected_n,
                                                 const cute::UMMA::Major& major_a, const cute::UMMA::Major& major_b, const cute::UMMA::Major& major_sfa,
-                                                const std::string& compiled_dims) {
+                                                const std::string& compiled_dims, 
+                                                const int& max_block_n,
+                                                const bool& enable_overlap,
+                                                const std::optional<torch::Tensor>& signal) {
     const auto& aligned_k = align(k, 128);
     DG_HOST_ASSERT(d.scalar_type() == torch::kBFloat16);
     DG_HOST_ASSERT(major_a == cute::UMMA::Major::K and major_b == cute::UMMA::Major::K);
@@ -518,7 +521,7 @@ static void sm90_m_grouped_fp8_gemm_masked_2d1d_transpose_n_group(const torch::T
         GemmType::MGroupedMasked, KernelType::Kernel1D2D,
         m, expected_n, k, num_groups, major_a, major_b,
         torch::kFloat8_e4m3fn, d.scalar_type(), false,
-        device_runtime->get_num_sms());
+        device_runtime->get_num_sms(), max_block_n, enable_overlap);
 
     // Requires no TMA splits
     DG_HOST_ASSERT(config.smem_config.swizzle_a_mode == config.block_k);
@@ -554,6 +557,7 @@ static void sm90_m_grouped_fp8_gemm_masked_2d1d_transpose_n_group(const torch::T
                                   config.multicast_config.num_multicast),
         .sfb = sfa.data_ptr(),
         .grouped_layout = masked_n.data_ptr(),
+        .signal = enable_overlap ? signal.value().data_ptr() : nullptr,
         .tensor_map_a = tensor_map_a,
         .tensor_map_b = tensor_map_b,
         .tensor_map_d = tensor_map_d,
@@ -562,6 +566,11 @@ static void sm90_m_grouped_fp8_gemm_masked_2d1d_transpose_n_group(const torch::T
     const auto& code = SM90FP8Gemm1D2DRuntime::generate(args);
     const auto& runtime = compiler->build("sm90_m_grouped_fp8_gemm_masked_2d1d_transpose_n_group", code);
     SM90FP8Gemm1D2DRuntime::launch(runtime, args);
+
+    // im not sure if this should be block_m or block_n
+    return enable_overlap ? 
+        std::optional(std::make_pair(config.block_n, config.signal_threshold)) : 
+        std::nullopt;
 }
 
 } // namespace deep_gemm

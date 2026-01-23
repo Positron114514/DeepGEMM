@@ -272,6 +272,13 @@ static GemmConfig get_best_config(const GemmType& gemm_type, const KernelType& k
         DG_HOST_ASSERT(num_min_sms <= num_sms);
     }
 
+    int signal_transpose = 0;
+    if (get_env<int>("GPS_USE_TRANSPOSE") == 4) {
+        signal_transpose = ceil_div(m, best_block_m);
+    } else {
+        signal_transpose = ceil_div(n, best_block_n);
+    }
+
     const auto& config = GemmConfig {
         .gemm_type = gemm_type,
         .kernel_type = kernel_type,
@@ -283,7 +290,7 @@ static GemmConfig get_best_config(const GemmType& gemm_type, const KernelType& k
         .block_m = best_block_m,
         .block_n = best_block_n,
         .block_k = block_k,
-        .signal_threshold = ceil_div(n, best_block_n),
+        .signal_threshold = signal_transpose,
         .num_stages = best_num_stages,
         .num_last_stages = ceil_div(k, block_k) % best_num_stages,
         .num_sms = num_min_sms,
