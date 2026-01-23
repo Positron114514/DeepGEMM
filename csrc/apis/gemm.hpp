@@ -405,7 +405,7 @@ static void m_grouped_fp8_gemm_tn_n_group_masked(const std::pair<torch::Tensor, 
     }
 }
 
-static void m_grouped_fp8_gemm_tn_transpose_n_group_masked(const std::pair<torch::Tensor, torch::Tensor>& a,
+static std::optional<std::pair<int, int>> m_grouped_fp8_gemm_tn_transpose_n_group_masked(const std::pair<torch::Tensor, torch::Tensor>& a,
                                          const std::pair<torch::Tensor, torch::Tensor>& b,
                                          const torch::Tensor& d,
                                          const torch::Tensor& masked_n,
@@ -828,7 +828,7 @@ static void register_apis(pybind11::module_& m) {
     m.def("m_grouped_fp8_gemm_tn_transpose_n_group_masked", &m_grouped_fp8_gemm_tn_transpose_n_group_masked,
           py::arg("a"), py::arg("b"), py::arg("d"), py::arg("masked_n"),
           py::arg("expected_n"), py::arg("recipe") = std::nullopt,
-          py::arg("compiled_dims") = "nk", py::arg("disable_ue8m0_cast") = false),
+          py::arg("compiled_dims") = "nk", py::arg("disable_ue8m0_cast") = false,
           py::arg("max_block_n") = 256, py::arg("enable_overlap") = false,
           py::arg("signal") = std::nullopt);
     m.def("k_grouped_fp8_gemm_tn_contiguous", &k_grouped_fp8_gemm_tn_contiguous,

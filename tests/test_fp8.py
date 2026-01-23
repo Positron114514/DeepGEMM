@@ -254,7 +254,7 @@ def test_m_grouped_gemm_masked_2d1d_transpose_n_group() -> None:
 
         # Test correctness
         for i in range(10):
-            a, b, masked_n, d, ref_d, signal = generate_m_grouped_masked_2d1d_transpose_n_group(num_groups, max_n, m, expected_n_per_group, k, use_ue8m0=use_ue8m0)
+            a, b, masked_n, d, ref_d, signal = generate_m_grouped_masked_2d1d_transpose_n_group(num_groups, max_n, m, expected_n_per_group, k, use_ue8m0=use_ue8m0, enable_overlap=enable_overlap)
             result = deep_gemm.m_grouped_fp8_gemm_tn_transpose_n_group_masked(a, b, d, masked_n, expected_n_per_group, disable_ue8m0_cast=disable_ue8m0_cast, enable_overlap=enable_overlap, signal=signal)
             
             if enable_overlap:

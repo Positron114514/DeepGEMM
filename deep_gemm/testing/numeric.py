@@ -4,7 +4,7 @@ from typing import Iterable
 def check_signal(num_local_expert, max_n, block_n, threshold, signal, masked_m):
     ceil_div = lambda a, b: (a + b - 1) // b
 
-    expert_len = max_n // block_n
+    expert_len = ceil_div(max_n, block_n)
     for expert in range(num_local_expert):
         mask = masked_m[expert]
         start = expert * expert_len
